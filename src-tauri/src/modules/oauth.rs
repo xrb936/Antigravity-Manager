@@ -96,9 +96,28 @@ pub async fn exchange_code(code: &str, redirect_uri: &str) -> Result<TokenRespon
         .map_err(|e| format!("Token 交换请求失败: {}", e))?;
 
     if response.status().is_success() {
-        response.json::<TokenResponse>()
+        let token_res = response.json::<TokenResponse>()
             .await
-            .map_err(|e| format!("Token 解析失败: {}", e))
+            .map_err(|e| format!("Token 解析失败: {}", e))?;
+        
+        // 添加详细日志
+        crate::modules::logger::log_info(&format!(
+            "Token 交换成功! access_token: {}..., refresh_token: {}",
+            &token_res.access_token.chars().take(20).collect::<String>(),
+            if token_res.refresh_token.is_some() { "✓" } else { "✗ 缺失" }
+        ));
+        
+        // 如果缺少 refresh_token,记录警告
+        if token_res.refresh_token.is_none() {
+            crate::modules::logger::log_warn(
+                "警告: Google 未返回 refresh_token。可能原因:\n\
+                 1. 用户之前已授权过此应用\n\
+                 2. 需要在 Google Cloud Console 撤销授权后重试\n\
+                 3. OAuth 参数配置问题"
+            );
+        }
+        
+        Ok(token_res)
     } else {
         let error_text = response.text().await.unwrap_or_default();
         Err(format!("Token 交换失败: {}", error_text))

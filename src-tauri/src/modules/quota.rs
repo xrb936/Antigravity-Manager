@@ -109,10 +109,18 @@ pub async fn fetch_quota(access_token: &str) -> crate::error::AppResult<QuotaDat
                 // 将 HTTP 错误状态转换为 AppError
                 if let Err(_) = response.error_for_status_ref() {
                     let status = response.status();
-                    // 策略: 先获取需要的 status/url 信息用于日志，消耗 response print body，
-                    // 然后我们其实无法再使用 response 生成 error。
-                    // 幸好我们在 if let 里面已经拿到了 err (owned)。
                     
+                    // ✅ 特殊处理 403 Forbidden - 直接返回,不重试
+                    if status == reqwest::StatusCode::FORBIDDEN {
+                        crate::modules::logger::log_warn(&format!(
+                            "账号无权限 (403 Forbidden),标记为 forbidden 状态"
+                        ));
+                        let mut q = QuotaData::new();
+                        q.is_forbidden = true;
+                        return Ok(q);
+                    }
+                    
+                    // 其他错误继续重试逻辑
                     if attempt < max_retries {
                          let text = response.text().await.unwrap_or_default();
                          crate::modules::logger::log_warn(&format!("API 错误: {} - {} (尝试 {}/{})", status, text, attempt, max_retries));

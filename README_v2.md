@@ -170,6 +170,18 @@ sudo xattr -rd com.apple.quarantine "/Applications/Antigravity Tools.app"
 
 ## 📅 更新日志 (Changelog)
 
+### v3.0.1 (2025-12-17)
+- **🔌 API 反代服务 (新!)**: 
+  - 内置高性能 Rust 反代服务,支持将 Gemini/Claude 转换为 OpenAI 协议。
+  - 智能账号轮询与自动故障转移。
+  - 支持 Cursor、Windsurf、NextChat 等所有 OpenAI 兼容客户端。
+- **🎨 图片生成增强**:
+  - 支持 `gemini-3-pro-image` 模型生成图片。
+  - 通过模型后缀控制分辨率 (如 `gemini-3-pro-image-16x9`)。
+  - 支持 1:1、16:9、9:16、4:3 等多种比例。
+  - 支持 4K 超清输出 (后缀 `-4k` 或 `-hd`)。
+- **📊 配额监控**: 新增图片生成配额的独立显示。
+
 ### v2.1.2 (2025-12-16)
 - **🪟 Windows 兼容性**: 修复了在 Windows 下无法打开数据目录的问题。
 - **📁 路径显示**: 设置页面现在显示数据目录的完整绝对路径，方便查找。

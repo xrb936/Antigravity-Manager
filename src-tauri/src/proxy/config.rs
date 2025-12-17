@@ -16,6 +16,14 @@ pub struct ProxyConfig {
 
     /// 是否自动启动
     pub auto_start: bool,
+
+    /// Anthropic 模型映射表 (key: Claude模型名, value: Gemini模型名)
+    #[serde(default)]
+    pub anthropic_mapping: std::collections::HashMap<String, String>,
+
+    /// API 请求超时时间(秒)
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout: u64,
 }
 
 impl Default for ProxyConfig {
@@ -25,6 +33,12 @@ impl Default for ProxyConfig {
             port: 8045,
             api_key: format!("sk-{}", uuid::Uuid::new_v4().simple()),
             auto_start: false,
+            anthropic_mapping: std::collections::HashMap::new(),
+            request_timeout: default_request_timeout(),
         }
     }
+}
+
+fn default_request_timeout() -> u64 {
+    120  // 默认 120 秒,原来 60 秒太短
 }

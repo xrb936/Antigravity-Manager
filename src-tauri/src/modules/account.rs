@@ -256,9 +256,9 @@ pub async fn switch_account(account_id: &str) -> Result<(), String> {
         save_account(&account)?;
     }
     
-    // 3. 关闭 Antigravity
+    // 3. 关闭 Antigravity (增加超时时间到 20 秒)
     if process::is_antigravity_running() {
-        process::close_antigravity(10)?;
+        process::close_antigravity(20)?;
     }
     
     // 4. 获取数据库路径并备份
@@ -418,14 +418,9 @@ pub async fn fetch_quota_with_retry(account: &mut Account) -> crate::error::AppR
                 }
                 return retry_result;
             }
-            
-            if status == StatusCode::FORBIDDEN {
-                let mut q = QuotaData::new();
-                q.is_forbidden = true;
-                return Ok(q);
-            }
         }
     }
     
+    // fetch_quota 已经处理了 403 错误,这里直接返回结果
     result
 }

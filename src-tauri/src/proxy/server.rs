@@ -15,7 +15,8 @@ use crate::proxy::{TokenManager, converter, client::GeminiClient};
 #[derive(Clone)]
 pub struct AppState {
     pub token_manager: Arc<TokenManager>,
-
+    pub anthropic_mapping: Arc<std::collections::HashMap<String, String>>,
+    pub request_timeout: u64,  // API 请求超时(秒)
 }
 
 /// Axum 服务器实例
@@ -28,14 +29,19 @@ impl AxumServer {
     pub async fn start(
         port: u16,
         token_manager: Arc<TokenManager>,
+        anthropic_mapping: std::collections::HashMap<String, String>,
+        request_timeout: u64,  // 新增超时参数
     ) -> Result<(Self, tokio::task::JoinHandle<()>), String> {
         let state = AppState {
             token_manager,
+            anthropic_mapping: Arc::new(anthropic_mapping),
+            request_timeout,
         };
         
         // 构建路由
         let app = Router::new()
             .route("/v1/chat/completions", post(chat_completions_handler))
+            .route("/v1/messages", post(anthropic_messages_handler))
             .route("/v1/models", get(list_models_handler))
             .route("/healthz", get(health_check_handler))
             .with_state(state);
@@ -151,7 +157,7 @@ async fn process_request(
     token: crate::proxy::token_manager::ProxyToken,
 ) -> RequestResult {
     let is_stream = request.stream.unwrap_or(false);
-    let is_image_model = request.model == "gemini-3-pro-image";
+    let is_image_model = request.model.contains("gemini-3-pro-image");
     
     if is_stream {
         if is_image_model {
@@ -166,11 +172,11 @@ async fn process_request(
 
 /// 处理画图模型的流式请求（模拟流式）
 async fn handle_image_stream_request(
-    _state: AppState,
+    state: AppState,
     request: Arc<converter::OpenAIChatRequest>,
     token: crate::proxy::token_manager::ProxyToken,
 ) -> RequestResult {
-    let client = GeminiClient::new();
+    let client = GeminiClient::new(state.request_timeout);
     let model = request.model.clone();
     
     let project_id = match get_project_id(&token) {
@@ -247,11 +253,11 @@ async fn handle_image_stream_request(
 
 /// 处理流式请求
 async fn handle_stream_request(
-    _state: AppState,
+    state: AppState,
     request: Arc<converter::OpenAIChatRequest>,
     token: crate::proxy::token_manager::ProxyToken,
 ) -> RequestResult {
-    let client = GeminiClient::new();
+    let client = GeminiClient::new(state.request_timeout);
     
     let project_id = match get_project_id(&token) {
         Ok(id) => id,
@@ -284,11 +290,11 @@ async fn handle_stream_request(
 
 /// 处理非流式请求
 async fn handle_non_stream_request(
-    _state: AppState,
+    state: AppState,
     request: Arc<converter::OpenAIChatRequest>,
     token: crate::proxy::token_manager::ProxyToken,
 ) -> RequestResult {
-    let client = GeminiClient::new();
+    let client = GeminiClient::new(state.request_timeout);
     
     let project_id = match get_project_id(&token) {
         Ok(id) => id,
@@ -338,7 +344,9 @@ fn check_retry_error(error_msg: &str) -> RequestResult {
        // 新增：网络错误或响应解析失败也进行重试
        error_msg.contains("读取响应文本失败") ||
        error_msg.contains("error decoding response body") ||
-       error_msg.contains("closed connection") {
+       error_msg.contains("closed connection") ||
+       error_msg.contains("error sending request") ||
+       error_msg.contains("operation timed out") {
         return RequestResult::Retry(error_msg.to_string());
     }
     
@@ -382,6 +390,24 @@ async fn list_models_handler(
             },
             {
                 "id": "gemini-3-pro-image",
+                "object": "model",
+                "created": 1734336000,
+                "owned_by": "google"
+            },
+            {
+                "id": "gemini-3-pro-image-16x9",
+                "object": "model",
+                "created": 1734336000,
+                "owned_by": "google"
+            },
+            {
+                "id": "gemini-3-pro-image-9x16",
+                "object": "model",
+                "created": 1734336000,
+                "owned_by": "google"
+            },
+            {
+                "id": "gemini-3-pro-image-4k",
                 "object": "model",
                 "created": 1734336000,
                 "owned_by": "google"
@@ -480,4 +506,371 @@ fn process_inline_data(mut response: serde_json::Value) -> serde_json::Value {
     
     // 直接返回修改后的对象，不再包裹 "response"
     response
+}
+
+/// Anthropic Messages 处理器
+async fn anthropic_messages_handler(
+    State(state): State<AppState>,
+    Json(request): Json<converter::AnthropicChatRequest>,
+) -> Response {
+    // 记录请求信息
+    let stream_mode = request.stream.unwrap_or(true);
+    let msg_count = request.messages.len();
+    let first_msg_preview = if let Some(first_msg) = request.messages.first() {
+        // content 是 Vec<AnthropicContent>
+        if let Some(first_content) = first_msg.content.first() {
+            match first_content {
+                converter::AnthropicContent::Text { text } => {
+                    if text.len() > 50 {
+                        format!("{}...", &text[..50])
+                    } else {
+                        text.clone()
+                    }
+                },
+                converter::AnthropicContent::Image { .. } => {
+                    "[图片]".to_string()
+                }
+            }
+        } else {
+            "无内容".to_string()
+        }
+    } else {
+        "无消息".to_string()
+    };
+    
+    // 预处理：解析映射后的模型名（仅用于日志显示，实际逻辑在 client 中也会再次处理，或者我们可以这里处理完传进去）
+    // 为了保持一致性，我们复用简单的查找逻辑用于日志
+    let mapped_model = {
+        let mapping = &state.anthropic_mapping;
+        if let Some(m) = mapping.get(&request.model) {
+            m.clone()
+        } else {
+            // 简单模糊匹配
+            let mut m = request.model.clone();
+            for (k, v) in mapping.iter() {
+                if request.model.contains(k) {
+                    m = v.clone();
+                    break;
+                }
+            }
+            // 默认回退逻辑 (与 Client 保持一致)
+            if m == request.model {
+                if request.model.contains("claude") {
+                    if request.model.contains("sonnet") { "gemini-3-pro-high".to_string() } else { "gemini-3-pro-low".to_string() }
+                } else {
+                    m
+                }
+            } else {
+                m
+            }
+        }
+    };
+
+    // 截断过长的消息预览
+    let truncated_preview = if first_msg_preview.len() > 50 {
+        format!("{}...", &first_msg_preview[..50])
+    } else {
+        first_msg_preview.clone()
+    };
+    
+    tracing::info!(
+        "(Anthropic) 请求 {} → {} | 消息数:{} | 流式:{} | 预览:{}",
+        request.model,
+        mapped_model,
+        msg_count,
+        if stream_mode { "是" } else { "否" },
+        truncated_preview
+    );
+    let max_retries = state.token_manager.len().max(1);
+    let mut attempts = 0;
+    
+    // Check if stream is requested. Default to false? Anthropic usually true for interactive.
+    let is_stream = request.stream.unwrap_or(false);
+    
+    // Clone request for retries
+    let request = Arc::new(request);
+
+    loop {
+        attempts += 1;
+        
+        // 1. 获取 Token
+        let token = match state.token_manager.get_token().await {
+            Some(t) => t,
+            None => {
+                 return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "type": "error",
+                        "error": {
+                            "type": "overloaded_error",
+                            "message": "No available accounts"
+                        }
+                    }))
+                ).into_response();
+            }
+        };
+        
+        tracing::info!("(Anthropic) 尝试使用账号: {} (第 {}/{} 次尝试)", token.email, attempts, max_retries);
+
+        // 2. 发起请求
+        // Helper logic inline to support retries
+        let client = GeminiClient::new(state.request_timeout);
+        let project_id_result = get_project_id(&token);
+        
+        if let Err(e) = project_id_result {
+             // If config error, don't retry, just fail
+             return e; // e is Response
+        }
+        let project_id = project_id_result.unwrap();
+
+        if is_stream {
+             let stream_result = client.stream_generate_anthropic(
+                &request,
+                &token.access_token,
+                project_id,
+                &token.session_id,
+                &state.anthropic_mapping
+            ).await;
+            
+            match stream_result {
+                Ok(stream) => {
+                    // Success! Convert stream to Anthropic SSE
+                    // Setup header for SSE
+                    let msg_id = format!("msg_{}", uuid::Uuid::new_v4());
+                    let token_clone = token.clone();
+                    let request_clone = Arc::clone(&request);
+                    let mut total_content_length = 0;
+                    let mut total_content = String::new(); // 收集完整内容用于日志
+                    let model_name = request.model.clone();
+                    
+                    // SSE processing Logic
+                     let sse_stream = async_stream::stream! {
+                        // 1. send message_start
+                        let start_event_json = serde_json::json!({
+                            "type": "message_start",
+                            "message": {
+                                "id": msg_id,
+                                "type": "message",
+                                "role": "assistant",
+                                "model": model_name,
+                                "content": [],
+                                "stop_reason": null,
+                                "stop_sequence": null,
+                                "usage": { "input_tokens": 0, "output_tokens": 0 } // Dummy usage
+                            }
+                        });
+                        yield Ok::<_, axum::Error>(Event::default().event("message_start").data(start_event_json.to_string()));
+
+                        // 2. send content_block_start
+                        let block_start_json = serde_json::json!({
+                            "type": "content_block_start",
+                            "index": 0,
+                            "content_block": {
+                                "type": "text",
+                                "text": ""
+                            }
+                        });
+                         yield Ok(Event::default().event("content_block_start").data(block_start_json.to_string()));
+                         
+                        // 3. Loop over chunks (which are OpenAI chunks from client)
+                        for await chunk_result in stream {
+                            match chunk_result {
+                                Ok(chunk_str) => {
+                                    if chunk_str == "[DONE]" { continue; }
+                                    
+                                    // Parse OpenAI Chunk
+                                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&chunk_str) {
+                                        let delta_content = json["choices"][0]["delta"]["content"].as_str().unwrap_or("");
+                                        let finish_reason = json["choices"][0]["finish_reason"].as_str();
+                                        
+                                        if !delta_content.is_empty() {
+                                            total_content_length += delta_content.len();
+                                            total_content.push_str(delta_content);
+                                            let delta_json = serde_json::json!({
+                                                "type": "content_block_delta",
+                                                "index": 0,
+                                                "delta": {
+                                                    "type": "text_delta",
+                                                    "text": delta_content
+                                                }
+                                            });
+                                            yield Ok(Event::default().event("content_block_delta").data(delta_json.to_string()));
+                                        }
+                                        
+                                        if let Some(reason) = finish_reason {
+                                            // Send message_delta with stop reason
+                                            let stop_reason = match reason {
+                                                "stop" => "end_turn",
+                                                "length" => "max_tokens",
+                                                _ => "end_turn"
+                                            };
+                                            
+                                            let msg_delta_json = serde_json::json!({
+                                                "type": "message_delta",
+                                                "delta": {
+                                                    "stop_reason": stop_reason,
+                                                    "stop_sequence": null,
+                                                    "usage": { "output_tokens": 0 }
+                                                }
+                                            });
+                                            yield Ok(Event::default().event("message_delta").data(msg_delta_json.to_string()));
+                                            
+                                            // Send message_stop
+                                            let stop_json = serde_json::json!({"type": "message_stop"});
+                                            yield Ok(Event::default().event("message_stop").data(stop_json.to_string()));
+                                            
+                                            // 记录响应完成及内容
+                                            if total_content.is_empty() {
+                                                tracing::warn!(
+                                                    "(Anthropic) ✓ {} | 回答为空 (可能是 Gemini 返回了非文本数据)",
+                                                    token_clone.email
+                                                );
+                                            } else {
+                                                let preview_len = total_content.len().min(100);  // 增加到 100 字符
+                                                let response_preview = &total_content[..preview_len];
+                                                let suffix = if total_content.len() > 100 { "..." } else { "" };
+                                                
+                                                tracing::info!(
+                                                    "(Anthropic) ✓ {} | 回答: {}{}",
+                                                    token_clone.email,
+                                                    response_preview,
+                                                    suffix
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                     // logging done in client
+                                }
+                            }
+                        }
+                    };
+                    
+                    return Sse::new(sse_stream).into_response();
+                },
+                Err(e_msg) => {
+                    // Check retry
+                    let check = check_retry_error(&e_msg);
+                    match check {
+                        RequestResult::Retry(reason) => {
+                            tracing::warn!("(Anthropic) 账号 {} 请求失败，重试: {}", token.email, reason);
+                             if attempts >= max_retries {
+                                 return (
+                                    StatusCode::TOO_MANY_REQUESTS,
+                                    Json(serde_json::json!({
+                                        "type": "error",
+                                        "error": {
+                                            "type": "rate_limit_error",
+                                            "message": format!("Max retries exceeded. Last error: {}", reason)
+                                        }
+                                    }))
+                                ).into_response();
+                             }
+                             continue;
+                        },
+                        RequestResult::Error(resp) => return resp,
+                        RequestResult::Success(resp) => return resp, // Should not happen here
+                    }
+                }
+            }
+
+        } else {
+            // Non-stream: collect streaming response and convert to non-streaming format
+            let stream_result = client.stream_generate_anthropic(
+                &request,
+                &token.access_token,
+                project_id,
+                &token.session_id,
+                &state.anthropic_mapping
+            ).await;
+            
+            match stream_result {
+                Ok(mut stream) => {
+                    let mut full_text = String::new();
+                    let mut stop_reason = "end_turn";
+                    
+                    // Collect all chunks
+                    while let Some(chunk_result) = stream.next().await {
+                        match chunk_result {
+                            Ok(chunk_str) => {
+                                if chunk_str == "[DONE]" { continue; }
+                                
+                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&chunk_str) {
+                                    if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
+                                        full_text.push_str(content);
+                                    }
+                                    if let Some(reason) = json["choices"][0]["finish_reason"].as_str() {
+                                        stop_reason = match reason {
+                                            "stop" => "end_turn",
+                                            "length" => "max_tokens",
+                                            _ => "end_turn"
+                                        };
+                                    }
+                                }
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    
+                    // Build Anthropic non-streaming response
+                    let response = serde_json::json!({
+                        "id": format!("msg_{}", uuid::Uuid::new_v4()),
+                        "type": "message",
+                        "role": "assistant",
+                        "model": request.model,
+                        "content": [{
+                            "type": "text",
+                            "text": full_text
+                        }],
+                        "stop_reason": stop_reason,
+                        "stop_sequence": null,
+                        "usage": {
+                            "input_tokens": 0,
+                            "output_tokens": 0
+                        }
+                    });
+                    
+                    // 记录响应(截取前60字符)
+                    let answer_text = response["content"].as_array()
+                        .and_then(|arr| arr.first())
+                        .and_then(|c| c["text"].as_str())
+                        .unwrap_or("");
+                    let preview_len = answer_text.len().min(60);
+                    let answer_preview = &answer_text[..preview_len];
+                    let suffix = if answer_text.len() > 60 { "..." } else { "" };
+                    
+                    tracing::info!(
+                        "(Anthropic) ✓ {} | 回答: {}{}",
+                        token.email, answer_preview, suffix
+                    );
+                    
+                    return (StatusCode::OK, Json(response)).into_response();
+                },
+                Err(e_msg) => {
+                    let check = check_retry_error(&e_msg);
+                    match check {
+                        RequestResult::Retry(reason) => {
+                            tracing::warn!("(Anthropic) 账号 {} 请求失败，重试: {}", token.email, reason);
+                            if attempts >= max_retries {
+                                return (
+                                    StatusCode::TOO_MANY_REQUESTS,
+                                    Json(serde_json::json!({
+                                        "type": "error",
+                                        "error": {
+                                            "type": "rate_limit_error",
+                                            "message": format!("Max retries exceeded. Last error: {}", reason)
+                                        }
+                                    }))
+                                ).into_response();
+                            }
+                            continue;
+                        },
+                        RequestResult::Error(resp) => return resp,
+                        RequestResult::Success(resp) => return resp,
+                    }
+                }
+            }
+        }
+    }
 }

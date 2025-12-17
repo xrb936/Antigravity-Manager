@@ -71,17 +71,21 @@ pub async fn start_proxy_service(
     }
     
     // 启动 Axum 服务器
-    let (axum_server, server_handle) = crate::proxy::AxumServer::start(
-        config.port,
-        token_manager.clone(),
-    )
-    .await
-    .map_err(|e| format!("启动 Axum 服务器失败: {}", e))?;
+    let (axum_server, server_handle) = // 启动服务器
+        match crate::proxy::AxumServer::start(
+            config.port,
+            token_manager.clone(), // Clone for AxumServer
+            config.anthropic_mapping.clone(),
+            config.request_timeout,  // 传递超时配置
+        ).await {
+            Ok((server, handle)) => (server, handle),
+            Err(e) => return Err(format!("启动 Axum 服务器失败: {}", e)),
+        };
     
     // 创建服务实例
     let instance = ProxyServiceInstance {
         config: config.clone(),
-        token_manager: token_manager.clone(),
+        token_manager: token_manager.clone(), // Clone for ProxyServiceInstance
         axum_server,
         server_handle,
     };

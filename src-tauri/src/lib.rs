@@ -97,6 +97,7 @@ pub fn run() {
             commands::get_data_dir_path,
             commands::show_main_window,
             commands::get_antigravity_path,
+            commands::check_for_updates,
             // 反代服务命令
             commands::proxy::start_proxy_service,
             commands::proxy::stop_proxy_service,

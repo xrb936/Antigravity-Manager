@@ -193,7 +193,13 @@
             "author": "作者",
             "wechat": "微信公众号",
             "github": "开源地址",
-            "copyright": "Copyright © 2025 Antigravity. All rights reserved."
+            "copyright": "Copyright © 2025 Antigravity. All rights reserved.",
+            "check_update": "检测更新",
+            "checking_update": "检测中...",
+            "latest_version": "已是最新版本",
+            "new_version_available": "发现新版本 {{version}}",
+            "download_update": "前往下载",
+            "update_check_failed": "检测更新失败"
         }
     },
     "tray": {
@@ -228,7 +234,9 @@
             "btn_regenerate": "重新生成密钥",
             "btn_copy": "复制",
             "btn_copied": "已复制",
-            "warning_key": "注意：请妥善保管您的 API 密钥，不要泄露给他人。"
+            "warning_key": "注意：请妥善保管您的 API 密钥，不要泄露给他人。",
+            "request_timeout": "请求超时",
+            "request_timeout_hint": "默认 120 秒，范围 30-600 秒。修改后需重启服务生效。"
         },
         "example": {
             "title": "使用示例",
@@ -244,10 +252,47 @@
             "flash_thinking": "轻量思考",
             "pro_low": "标准版",
             "pro_high": "高配版",
-            "pro_image": "图像生成",
+            "pro_image": "图像生成 (1:1)",
+            "pro_image_16_9": "图像生成 (16:9)",
+            "pro_image_9_16": "图像生成 (9:16)",
+            "pro_image_4_3": "图像生成 (4:3)",
+            "pro_image_3_4": "图像生成 (3:4)",
+            "pro_image_1_1": "图像生成 (1:1)",
             "claude_sonnet": "均衡模型",
             "claude_sonnet_thinking": "深度思考",
             "claude_opus_thinking": "最强推理"
+        },
+        "mapping": {
+            "title": "Claude Code 模型映射",
+            "description": "将 Claude Code 模型映射到 Antigravity 模型,智能路由请求以优化成本和速度。",
+            "default": "默认",
+            "sonnet_desc": "最强复杂任务",
+            "opus_desc": "高级层级",
+            "haiku_desc": "极速响应",
+            "maps_to": "映射到 Antigravity",
+            "apply_recommended": "应用推荐配置",
+            "reset_all": "重置全部"
+        },
+        "models": {
+            "flash": "极速响应",
+            "flash_thinking": "思考能力",
+            "pro_high": "最强推理",
+            "pro_low": "低配额",
+            "sonnet": "代码推理",
+            "sonnet_thinking": "思维链",
+            "opus_thinking": "最强思维"
+        },
+        "examples": {
+            "title": "使用示例"
+        },
+        "multi_protocol": {
+            "title": "多协议支持",
+            "subtitle": "Multi-Protocol",
+            "description": "反代服务支持 OpenAI 和 Anthropic 两种 API 格式，满足不同工具需求",
+            "openai_label": "OpenAI 协议",
+            "anthropic_label": "Anthropic 协议",
+            "openai_tools": "Cursor, Windsurf, NextChat",
+            "anthropic_tools": "Claude Code CLI"
         }
     }
 }

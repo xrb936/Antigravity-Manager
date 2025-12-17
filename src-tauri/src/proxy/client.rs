@@ -10,15 +10,236 @@ pub struct GeminiClient {
 }
 
 impl GeminiClient {
-    pub fn new() -> Self {
+    pub fn new(timeout_secs: u64) -> Self {
         Self {
             client: Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
+                .timeout(std::time::Duration::from_secs(timeout_secs))
                 .build()
                 .unwrap(),
         }
     }
     
+    /// 发送流式请求到 Antigravity API (Anthropic 格式)
+    pub async fn stream_generate_anthropic(
+        &self,
+        anthropic_request: &converter::AnthropicChatRequest,
+        access_token: &str,
+        project_id: &str,
+        session_id: &str,
+        model_mapping: &std::collections::HashMap<String, String>,
+    ) -> Result<impl futures::Stream<Item = Result<String, String>>, String> {
+         // 使用 Antigravity 内部 API
+        let url = "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse";
+        
+        let contents = converter::convert_anthropic_to_gemini_contents(anthropic_request);
+        let model_name = anthropic_request.model.clone();
+        
+        // System Instruction
+        let system_instruction = if let Some(sys) = &anthropic_request.system {
+            serde_json::json!({
+                "role": "user",
+                "parts": [{"text": sys}]
+            })
+        } else {
+             serde_json::json!({
+                "role": "user",
+                "parts": [{"text": ""}]
+            })
+        };
+
+        // Generation Config
+        let generation_config = serde_json::json!({
+            "temperature": anthropic_request.temperature.unwrap_or(1.0),
+            "topP": anthropic_request.top_p.unwrap_or(0.95),
+            "maxOutputTokens": anthropic_request.max_tokens.unwrap_or(16384),  // ✅ 增加到 16384 避免 MAX_TOKENS 问题
+            "candidateCount": 1,
+            // "stopSequences": anthropic_request.stop_sequences // Optional support
+        });
+
+        // 映射模型名 (Anthropic 模型名 -> Gemini 模型名，暂时直通或简单映射)
+        // Claude Code 可能会传 "claude-3-5-sonnet-20240620" 等
+        // 目前策略：尝试匹配 gemini 模型，或者默认使用 gemini-3-pro-low 如果传的是 anthropic 名字
+        let upstream_model = if let Some(mapped) = model_mapping.get(&model_name) {
+            tracing::info!("(Anthropic) 模型映射: {} -> {}", model_name, mapped);
+            mapped.as_str()
+        } else {
+            // 尝试前缀匹配或模糊匹配 (例如 "claude-3-5-sonnet-xxxx" -> match "claude-3-5-sonnet")
+            // 这里为了简单，先只做精确匹配，或者保留原来的 fallback
+            let mut mapped_model = model_name.as_str();
+            
+            // 遍历映射表，看是否有 key 是 model_name 的子串 (例如配置 "sonnet" -> "gemini-high")
+            for (key, val) in model_mapping.iter() {
+                if model_name.contains(key) {
+                    tracing::info!("(Anthropic) 模型模糊映射: {} (match '{}') -> {}", model_name, key, val);
+                    mapped_model = val.as_str();
+                    break;
+                }
+            }
+            
+            if mapped_model == model_name.as_str() {
+                // 没有命中任何配置，走默认硬编码逻辑
+                if model_name.contains("claude") {
+                     if model_name.contains("sonnet") { "gemini-3-pro-high" } else { "gemini-3-pro-low" }
+                } else {
+                    model_name.as_str()
+                }
+            } else {
+                mapped_model
+            }
+        };
+
+        let request_body = serde_json::json!({
+            "project": project_id,
+            "requestId": Uuid::new_v4().to_string(),
+            "model": upstream_model,
+            "userAgent": "antigravity",
+            "request": {
+                "contents": contents,
+                "systemInstruction": system_instruction,
+                "generationConfig": generation_config,
+                // ✅ 移除 toolConfig 以避免 MALFORMED_FUNCTION_CALL 错误
+                // "toolConfig": {
+                //     "functionCallingConfig": {
+                //         "mode": "VALIDATED"
+                //     }
+                // },
+                "sessionId": session_id
+            }
+        });
+
+        let response = self.client
+            .post(url)
+            .bearer_auth(access_token)
+            .header("Host", "daily-cloudcode-pa.sandbox.googleapis.com")
+            .header("User-Agent", "antigravity/1.11.3 windows/amd64")
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|e| format!("请求失败: {}", e))?;
+        
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("API 返回错误 {}: {}", status, body));
+        }
+
+        // 处理流式响应并转换为 Anthropic SSE 格式
+        // 注意：Anthropic SSE 格式复杂:
+        // event: message_start { "type": "message_start", "message": { ... } }
+        // event: content_block_start { "type": "content_block_start", "index": 0, "content_block": { "type": "text", "text": "" } }
+        // event: content_block_delta { "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": "Hello" } }
+        // event: message_delta { "type": "message_delta", "delta": { "stop_reason": "end_turn", ... } }
+        // event: message_stop { "type": "message_stop" }
+        
+        // 为了简化，我们需要在这里构建流。
+        // 因为 Client 层的 stream_generate 返回的是 Result<String, String> 的流，通常是指 payload data。
+        // 为了保持一致性，我们在这里返回 "raw" SSE event data 字符串，
+        // Server 层负责封装成 event: type \n data: ... 格式？
+        // 或者 Server 层直接透传。
+        // 观察 server.rs: handle_stream_request 中 Sse::new(sse_stream)，其中 sse_stream yield Event.
+        // client 返回 Result<String, ...>，server 把它包装进 data()。
+        
+        // 问题：Anthropic SSE 需要 `event: name` 字段，而 OpenAI 只需要 `data:`。
+        // Axum SSE default event is "message".
+        // 所以我们可能需要让 client 返回 (EventType, Data) tuple? 
+        // 或者让 client 返回封装好的 Event struct?
+        // 为保持最小修改，我们让 client 返回 String，但是这个 String 包含了 Event 的信息？
+        // 不行，Server 会再次封装。
+        
+        // 方案：让 stream_generate_anthropic 返回 `impl Stream<Item = Result<(String, String), String>>`
+        // tuple: (event_type, json_data)
+        
+        // 但是 rust 静态类型要求返回类型一致。现有 stream_generate 返回 `Result<String, String>` (implicit item).
+        // 我们可以返回 `Result<AnthropicEvent, String>` enum?
+        // 或者简单点，Server 端分别处理。
+        
+        // 在 client.rs 里我们只负责解析 Gemini 响应。
+        // 转换逻辑：Gemini chunk -> Anthropic events (multiple).
+        // 一个 Gemini chunk 可能包含 text，对应 content_block_delta。
+        // 初始 chunk 对应 message_start + content_block_start。
+        // 结束 chunk 对应 message_delta + message_stop。
+        
+        // 这是个复杂逻辑。
+        // 为了不把 client.rs 搞得太乱，建议把 "Gemini Stream -> Anthropic Stream" 的转换逻辑放到 converter.rs 或新的 proxy/anthropic.rs 中？
+        // 这里仅负责发起请求，拿到 Gemini 的 ByteStream，然后 map 转换。
+        
+        let msg_id = format!("msg_{}", Uuid::new_v4());
+        let created_model = model_name.clone();
+
+        let stream = response.bytes_stream()
+            .eventsource()
+            .flat_map(move |result| {
+                 match result {
+                    Ok(event) => {
+                        let data = event.data;
+                         if data == "[DONE]" {
+                             return futures::stream::iter(vec![Ok("[DONE]".to_string())]);
+                         }
+                         
+                        // Parse Gemini JSON
+                        let json: serde_json::Value = match serde_json::from_str(&data) {
+                            Ok(j) => j,
+                            Err(e) => return futures::stream::iter(vec![Err(format!("解析 Gemini 流失败: {}", e))]),
+                        };
+                         
+                        // 解析 Gemini JSON
+                        let candidates = if let Some(c) = json.get("candidates") {
+                             c
+                        } else if let Some(r) = json.get("response") {
+                             r.get("candidates").unwrap_or(&serde_json::Value::Null)
+                        } else {
+                             &serde_json::Value::Null
+                        };
+
+                        let text = candidates.get(0)
+                            .and_then(|c| c.get("content"))
+                            .and_then(|c| c.get("parts"))
+                            .and_then(|p| p.get(0))
+                            .and_then(|p| p.get("text"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                        
+                        // ✅ 添加日志:记录原始响应
+                        if text.is_empty() {
+                            // 记录完整的 candidates 数据,帮助调试
+                            tracing::warn!(
+                                "(Anthropic) Gemini 返回空文本,原始 candidates: {}",
+                                serde_json::to_string(candidates).unwrap_or_else(|_| "无法序列化".to_string())
+                            );
+                        }
+                            
+                        let gemini_finish_reason = candidates.get(0)
+                            .and_then(|c| c.get("finishReason"))
+                            .and_then(|f| f.as_str());
+
+                        let finish_reason = match gemini_finish_reason {
+                            Some("STOP") => Some("stop"),
+                            Some("MAX_TOKENS") => Some("length"),
+                            Some("SAFETY") => Some("content_filter"), 
+                            _ => None
+                        };
+                        
+                        let chunk = serde_json::json!({
+                            "id": "chatcmpl-stream", // Dummy ID, server might overwrite or ignore
+                            "object": "chat.completion.chunk",
+                            "created": chrono::Utc::now().timestamp(),
+                            "model": model_name,
+                            "choices": [{
+                                "index": 0,
+                                "delta": { "content": text },
+                                "finish_reason": finish_reason
+                            }]
+                        });
+                        
+                        return futures::stream::iter(vec![Ok(chunk.to_string())]);
+                     },
+                     Err(e) => return futures::stream::iter(vec![Err(format!("流错误: {}", e))]),
+                 }
+            });
+            
+        Ok(stream)
+    }
+
     /// 发送流式请求到 Antigravity API
     /// 注意：需要将 OpenAI 格式转换为 Antigravity 专用格式
     pub async fn stream_generate(
@@ -34,10 +255,65 @@ impl GeminiClient {
         let contents = converter::convert_openai_to_gemini_contents(&openai_request.messages);
         let model_name = openai_request.model.clone(); // Clone for closure
         
+        // 解析模型后缀配置 (e.g. gemini-3-pro-image-16x9-4k)
+        let model_suffix_ar = if model_name.contains("-16x9") { Some("16:9") }
+            else if model_name.contains("-9x16") { Some("9:16") }
+            else if model_name.contains("-4x3") { Some("4:3") }
+            else if model_name.contains("-3x4") { Some("3:4") }
+            else if model_name.contains("-1x1") { Some("1:1") }
+            else { None };
+
+        let model_suffix_4k = model_name.contains("-4k") || model_name.contains("-hd");
+
+        // 解析图片配置 (参数优先 > 后缀 > 默认)
+        let aspect_ratio = match openai_request.size.as_deref() {
+            Some("1024x1792") => "9:16",
+            Some("1792x1024") => "16:9",
+            Some("768x1024") => "3:4",
+            Some("1024x768") => "4:3",
+            Some("1024x1024") => "1:1",
+            Some(_) => "1:1", // Fallback for unknown sizes
+            None => model_suffix_ar.unwrap_or("1:1"),
+        };
+
+        let is_hd = match openai_request.quality.as_deref() {
+            Some("hd") => true,
+            Some(_) => false,
+            None => model_suffix_4k,
+        };
+        
+        // 构造 generationConfig
+        let mut generation_config = serde_json::json!({
+            "temperature": openai_request.temperature.unwrap_or(1.0),
+            "topP": openai_request.top_p.unwrap_or(0.95),
+            "maxOutputTokens": openai_request.max_tokens.unwrap_or(8096),
+            "candidateCount": 1
+        });
+
+        // 如果是画图模型，注入 imageConfig
+        if openai_request.model.contains("gemini-3-pro-image") {
+             if let Some(config) = generation_config.as_object_mut() {
+                let mut image_config = serde_json::Map::new();
+                image_config.insert("aspectRatio".to_string(), serde_json::json!(aspect_ratio));
+                if is_hd {
+                    image_config.insert("imageSize".to_string(), serde_json::json!("4K"));
+                }
+                
+                config.insert("imageConfig".to_string(), serde_json::Value::Object(image_config));
+            }
+        }
+
+        // 如果是图片模型，上游模型名必须是 "gemini-3-pro-image"，不能带后缀
+        let upstream_model = if openai_request.model.contains("gemini-3-pro-image") {
+            "gemini-3-pro-image".to_string()
+        } else {
+            openai_request.model.clone()
+        };
+
         let request_body = serde_json::json!({
             "project": project_id,
             "requestId": Uuid::new_v4().to_string(),
-            "model": openai_request.model,
+            "model": upstream_model,
             "userAgent": "antigravity",
             "request": {
                 "contents": contents,
@@ -45,12 +321,7 @@ impl GeminiClient {
                     "role": "user",
                     "parts": [{"text": ""}]
                 },
-                "generationConfig": {
-                    "temperature": openai_request.temperature.unwrap_or(1.0),
-                    "topP": openai_request.top_p.unwrap_or(0.95),
-                    "maxOutputTokens": openai_request.max_tokens.unwrap_or(8096),
-                    "candidateCount": 1
-                },
+                "generationConfig": generation_config,
                 "toolConfig": {
                     "functionCallingConfig": {
                         "mode": "VALIDATED"
@@ -165,10 +436,66 @@ impl GeminiClient {
         let contents = converter::convert_openai_to_gemini_contents(&openai_request.messages);
         
         // 构造 Antigravity 专用请求体
+        // 解析模型后缀配置
+        let model_name = &openai_request.model;
+        let model_suffix_ar = if model_name.contains("-16x9") { Some("16:9") }
+            else if model_name.contains("-9x16") { Some("9:16") }
+            else if model_name.contains("-4x3") { Some("4:3") }
+            else if model_name.contains("-3x4") { Some("3:4") }
+            else if model_name.contains("-1x1") { Some("1:1") }
+            else { None };
+
+        let model_suffix_4k = model_name.contains("-4k") || model_name.contains("-hd");
+
+        // 解析图片配置
+        let aspect_ratio = match openai_request.size.as_deref() {
+            Some("1024x1792") => "9:16",
+            Some("1792x1024") => "16:9",
+            Some("768x1024") => "3:4",
+            Some("1024x768") => "4:3",
+            Some("1024x1024") => "1:1",
+             Some(_) => "1:1",
+            None => model_suffix_ar.unwrap_or("1:1"),
+        };
+
+        let is_hd = match openai_request.quality.as_deref() {
+            Some("hd") => true,
+            Some(_) => false,
+            None => model_suffix_4k,
+        };
+        
+        // 构造 generationConfig
+        let mut generation_config = serde_json::json!({
+            "temperature": openai_request.temperature.unwrap_or(1.0),
+            "topP": openai_request.top_p.unwrap_or(0.95),
+            "maxOutputTokens": openai_request.max_tokens.unwrap_or(8096),
+            "candidateCount": 1
+        });
+
+        // 如果是画图模型，注入 imageConfig
+        if openai_request.model.contains("gemini-3-pro-image") {
+             if let Some(config) = generation_config.as_object_mut() {
+                let mut image_config = serde_json::Map::new();
+                image_config.insert("aspectRatio".to_string(), serde_json::json!(aspect_ratio));
+                if is_hd {
+                    image_config.insert("imageSize".to_string(), serde_json::json!("4K"));
+                }
+                config.insert("imageConfig".to_string(), serde_json::Value::Object(image_config));
+            }
+        }
+
+        // 如果是图片模型，上游模型名必须是 "gemini-3-pro-image"，不能带后缀
+        let upstream_model = if openai_request.model.contains("gemini-3-pro-image") {
+            "gemini-3-pro-image".to_string()
+        } else {
+            openai_request.model.clone()
+        };
+
+        // 构造 Antigravity 专用请求体
         let request_body = serde_json::json!({
             "project": project_id,
             "requestId": Uuid::new_v4().to_string(),
-            "model": openai_request.model,
+            "model": upstream_model,
             "userAgent": "antigravity",
             "request": {
                 "contents": contents,
@@ -176,12 +503,7 @@ impl GeminiClient {
                     "role": "user",
                     "parts": [{"text": ""}]
                 },
-                "generationConfig": {
-                    "temperature": openai_request.temperature.unwrap_or(1.0),
-                    "topP": openai_request.top_p.unwrap_or(0.95),
-                    "maxOutputTokens": openai_request.max_tokens.unwrap_or(8096),
-                    "candidateCount": 1
-                },
+                "generationConfig": generation_config,
                 "toolConfig": {
                     "functionCallingConfig": {
                         "mode": "VALIDATED"
@@ -215,11 +537,5 @@ impl GeminiClient {
                 tracing::error!("解析响应失败. 错误: {}. 原始响应: {}", e, text);
                 format!("解析响应失败: {}. 原始响应: {}", e, text)
             })
-    }
-}
-
-impl Default for GeminiClient {
-    fn default() -> Self {
-        Self::new()
     }
 }

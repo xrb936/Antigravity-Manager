@@ -1,6 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
 import { Account, QuotaData } from '../types/account';
 
+// 检查 Tauri 环境
+function ensureTauriEnvironment() {
+    // 只检查 invoke 函数是否可用
+    // 不检查 __TAURI__ 对象,因为在某些 Tauri 版本中可能不存在
+    if (typeof invoke !== 'function') {
+        throw new Error('Tauri API 未正确加载,请重启应用');
+    }
+}
+
 export async function listAccounts(): Promise<Account[]> {
     return await invoke('list_accounts');
 }
@@ -38,10 +47,26 @@ export async function refreshAllQuotas(): Promise<RefreshStats> {
 
 // OAuth
 export async function startOAuthLogin(): Promise<Account> {
-    return await invoke('start_oauth_login');
+    ensureTauriEnvironment();
+
+    try {
+        return await invoke('start_oauth_login');
+    } catch (error) {
+        // 增强错误信息
+        if (typeof error === 'string') {
+            // 如果是 refresh_token 缺失错误,保持原样(已包含详细说明)
+            if (error.includes('Refresh Token') || error.includes('refresh_token')) {
+                throw error;
+            }
+            // 其他错误添加上下文
+            throw `OAuth 授权失败: ${error}`;
+        }
+        throw error;
+    }
 }
 
 export async function cancelOAuthLogin(): Promise<void> {
+    ensureTauriEnvironment();
     return await invoke('cancel_oauth_login');
 }
 

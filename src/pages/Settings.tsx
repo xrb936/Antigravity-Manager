@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, Github, User, MessageCircle, ExternalLink } from 'lucide-react';
+import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useConfigStore } from '../stores/useConfigStore';
@@ -26,6 +26,15 @@ function Settings() {
     // Dialog state
     const [isClearLogsOpen, setIsClearLogsOpen] = useState(false);
     const [dataDirPath, setDataDirPath] = useState<string>('~/.antigravity_tools/');
+
+    // Update check state
+    const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+    const [updateInfo, setUpdateInfo] = useState<{
+        hasUpdate: boolean;
+        latestVersion: string;
+        currentVersion: string;
+        downloadUrl: string;
+    } | null>(null);
 
     useEffect(() => {
         loadConfig();
@@ -82,6 +91,36 @@ function Settings() {
             }
         } catch (error) {
             showToast(`${t('common.error')}: ${error}`, 'error');
+        }
+    };
+
+    const handleCheckUpdate = async () => {
+        setIsCheckingUpdate(true);
+        setUpdateInfo(null);
+        try {
+            const result = await invoke<{
+                has_update: boolean;
+                latest_version: string;
+                current_version: string;
+                download_url: string;
+            }>('check_for_updates');
+
+            setUpdateInfo({
+                hasUpdate: result.has_update,
+                latestVersion: result.latest_version,
+                currentVersion: result.current_version,
+                downloadUrl: result.download_url,
+            });
+
+            if (result.has_update) {
+                showToast(t('settings.about.new_version_available', { version: result.latest_version }), 'info');
+            } else {
+                showToast(t('settings.about.latest_version'), 'success');
+            }
+        } catch (error) {
+            showToast(`${t('settings.about.update_check_failed')}: ${error}`, 'error');
+        } finally {
+            setIsCheckingUpdate(false);
         }
     };
 
@@ -335,7 +374,7 @@ function Settings() {
                                         <h3 className="text-3xl font-black text-gray-900 dark:text-base-content tracking-tight mb-2">Antigravity Tools</h3>
                                         <div className="flex items-center justify-center gap-2 text-sm">
                                             <span className="px-2.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium border border-blue-200 dark:border-blue-800">
-                                                v3.0.0
+                                                v3.0.2
                                             </span>
                                             <span className="text-gray-400 dark:text-gray-600">•</span>
                                             <span className="text-gray-500 dark:text-gray-400">Professional Account Management</span>
@@ -398,6 +437,44 @@ function Settings() {
                                     <div className="px-3 py-1 bg-gray-50 dark:bg-base-200 rounded-lg text-xs font-medium text-gray-500 dark:text-gray-400 border border-gray-100 dark:border-base-300">
                                         TypeScript
                                     </div>
+                                </div>
+
+                                {/* Check for Updates */}
+                                <div className="flex flex-col items-center gap-3">
+                                    <button
+                                        onClick={handleCheckUpdate}
+                                        disabled={isCheckingUpdate}
+                                        className="px-6 py-2.5 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-gray-700 text-white rounded-lg transition-all flex items-center gap-2 shadow-sm hover:shadow-md disabled:cursor-not-allowed"
+                                    >
+                                        <RefreshCw className={`w-4 h-4 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+                                        {isCheckingUpdate ? t('settings.about.checking_update') : t('settings.about.check_update')}
+                                    </button>
+
+                                    {/* Update Status */}
+                                    {updateInfo && !isCheckingUpdate && (
+                                        <div className="text-center">
+                                            {updateInfo.hasUpdate ? (
+                                                <div className="flex flex-col items-center gap-2">
+                                                    <div className="text-sm text-orange-600 dark:text-orange-400 font-medium">
+                                                        {t('settings.about.new_version_available', { version: updateInfo.latestVersion })}
+                                                    </div>
+                                                    <a
+                                                        href={updateInfo.downloadUrl}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        className="px-4 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg transition-colors flex items-center gap-1.5"
+                                                    >
+                                                        {t('settings.about.download_update')}
+                                                        <ExternalLink className="w-3.5 h-3.5" />
+                                                    </a>
+                                                </div>
+                                            ) : (
+                                                <div className="text-sm text-green-600 dark:text-green-400 font-medium">
+                                                    ✓ {t('settings.about.latest_version')}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 

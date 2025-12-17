@@ -175,28 +175,50 @@ pub async fn save_config(app: tauri::AppHandle, config: AppConfig) -> Result<(),
 
 #[tauri::command]
 pub async fn start_oauth_login(app_handle: tauri::AppHandle) -> Result<Account, String> {
+    modules::logger::log_info("开始 OAuth 授权流程...");
+    
     // 1. 启动 OAuth 流程获取 Token
     let token_res = modules::oauth_server::start_oauth_flow(app_handle).await?;
     
-    // 2. 获取用户信息
-    let user_info = modules::oauth::get_user_info(&token_res.access_token).await?;
+    // 2. 检查 refresh_token
+    let refresh_token = token_res.refresh_token.ok_or_else(|| {
+        "未获取到 Refresh Token。\n\n\
+         可能原因:\n\
+         1. 您之前已授权过此应用,Google 不会再次返回 refresh_token\n\n\
+         解决方案:\n\
+         1. 访问 https://myaccount.google.com/permissions\n\
+         2. 撤销 'Antigravity Tools' 的访问权限\n\
+         3. 重新进行 OAuth 授权\n\n\
+         或者使用 'Refresh Token' 标签页手动添加账号".to_string()
+    })?;
     
-    // 3. 尝试获取项目ID
+    // 3. 获取用户信息
+    let user_info = modules::oauth::get_user_info(&token_res.access_token).await?;
+    modules::logger::log_info(&format!("获取用户信息成功: {}", user_info.email));
+    
+    // 4. 尝试获取项目ID
     let project_id = crate::proxy::project_resolver::fetch_project_id(&token_res.access_token)
         .await
-        .ok(); // 失败不阻塞，后续可懒加载
+        .ok();
     
-    // 4. 构造 TokenData
+    if let Some(ref pid) = project_id {
+        modules::logger::log_info(&format!("获取项目ID成功: {}", pid));
+    } else {
+        modules::logger::log_warn("未能获取项目ID,将在后续懒加载");
+    }
+    
+    // 5. 构造 TokenData
     let token_data = TokenData::new(
         token_res.access_token,
-        token_res.refresh_token.ok_or("未获取到 Refresh Token")?,
+        refresh_token,
         token_res.expires_in,
         Some(user_info.email.clone()),
-        project_id, // 保存项目ID
-        None,  // session_id
+        project_id,
+        None,
     );
     
-    // 5. 添加或更新到账号列表
+    // 6. 添加或更新到账号列表
+    modules::logger::log_info("正在保存账号信息...");
     modules::upsert_account(user_info.email.clone(), user_info.get_display_name(), token_data)
 }
 
@@ -283,4 +305,88 @@ pub async fn get_antigravity_path() -> Result<String, String> {
         Some(path) => Ok(path.to_string_lossy().to_string()),
         None => Err("未找到 Antigravity 安装路径".to_string())
     }
+}
+
+/// 检测更新响应结构
+#[derive(serde::Serialize)]
+pub struct UpdateInfo {
+    has_update: bool,
+    latest_version: String,
+    current_version: String,
+    download_url: String,
+}
+
+/// 检测 GitHub releases 更新
+#[tauri::command]
+pub async fn check_for_updates() -> Result<UpdateInfo, String> {
+    const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+    const GITHUB_API_URL: &str = "https://api.github.com/repos/lbjlaq/Antigravity-Manager/releases/latest";
+    
+    modules::logger::log_info("开始检测更新...");
+    
+    // 发起 HTTP 请求
+    let client = reqwest::Client::new();
+    let response = client
+        .get(GITHUB_API_URL)
+        .header("User-Agent", "Antigravity-Tools")
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("GitHub API 返回错误: {}", response.status()));
+    }
+    
+    // 解析 JSON 响应
+    let json: serde_json::Value = response.json().await
+        .map_err(|e| format!("解析响应失败: {}", e))?;
+    
+    let latest_version = json["tag_name"]
+        .as_str()
+        .ok_or("无法获取版本号")?
+        .trim_start_matches('v');
+    
+    let download_url = json["html_url"]
+        .as_str()
+        .unwrap_or("https://github.com/lbjlaq/Antigravity-Manager/releases")
+        .to_string();
+    
+    // 比较版本号
+    let has_update = compare_versions(latest_version, CURRENT_VERSION);
+    
+    modules::logger::log_info(&format!(
+        "版本检测完成: 当前 v{}, 最新 v{}, 有更新: {}",
+        CURRENT_VERSION, latest_version, has_update
+    ));
+    
+    Ok(UpdateInfo {
+        has_update,
+        latest_version: format!("v{}", latest_version),
+        current_version: format!("v{}", CURRENT_VERSION),
+        download_url,
+    })
+}
+
+/// 简单的版本号比较 (假设格式为 x.y.z)
+fn compare_versions(latest: &str, current: &str) -> bool {
+    let parse_version = |v: &str| -> Vec<u32> {
+        v.split('.')
+            .filter_map(|s| s.parse::<u32>().ok())
+            .collect()
+    };
+    
+    let latest_parts = parse_version(latest);
+    let current_parts = parse_version(current);
+    
+    for i in 0..3 {
+        let l = latest_parts.get(i).unwrap_or(&0);
+        let c = current_parts.get(i).unwrap_or(&0);
+        if l > c {
+            return true;
+        } else if l < c {
+            return false;
+        }
+    }
+    
+    false
 }

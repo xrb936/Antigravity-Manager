@@ -8,7 +8,7 @@
   
   <p>
     <a href="https://github.com/lbjlaq/Antigravity-Manager">
-      <img src="https://img.shields.io/badge/Version-3.0.0-blue?style=flat-square" alt="Version">
+      <img src="https://img.shields.io/badge/Version-3.0.2-blue?style=flat-square" alt="Version">
     </a>
     <img src="https://img.shields.io/badge/Tauri-v2-orange?style=flat-square" alt="Tauri">
     <img src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square" alt="React">
@@ -72,7 +72,7 @@ Fully compatible with OpenAI's `messages` format. Multi-turn conversations work 
 - **Token Management**: Manage dozens of Gemini/Claude accounts.
 - **Auto-Refresh**: Keeps your tokens alive automatically.
 - **Quota Monitoring**: Real-time visualization of model quotas (Text & Image).
-- **IDE Injection**: Auto-inject tokens into local VSCode-based IDEs (Cursor/Windsurf) for seamless "Pro" usage.
+- **Account Switching**: One-click token injection into local Antigravity database for seamless switching.
 
 ### 🛡️ Privacy First
 - **Local Storage**: All data inside `gui_config.json` and `antigravity.db` stays on your machine.
@@ -110,6 +110,48 @@ Fully compatible with OpenAI's `messages` format. Multi-turn conversations work 
 | **claude-opus-4-5-thinking** | **Opus Thinking**. Claude's most powerful thinking model. |
 
 > 💡 **Tip**: The proxy supports pass-through for all official Google/Anthropic model IDs.
+
+## 🔄 Changelog
+
+### v3.0.2 (2025-12-17)
+
+#### 🔧 API Proxy Optimizations
+- **403 Error Smart Handling**: Instantly identifies and marks accounts with 403 Forbidden, no more retries
+  - Auto-marks as "forbidden" status
+  - Auto-skips 403 accounts during batch refresh
+  - Saves 3+ seconds response time
+
+- **Claude CLI Response Optimization**: Fixed empty response and JSON format issues
+  - Increased `maxOutputTokens` from 8096 to 16384 for longer responses
+  - Removed `toolConfig` to avoid MALFORMED_FUNCTION_CALL errors
+  - Added detailed diagnostic logs recording raw Gemini responses
+
+- **Logging System Enhancement**:
+  - Records full candidates data for empty text responses
+  - Increased log display length from 60 to 100 characters
+  - Distinguished log levels for empty vs normal responses
+
+#### 🐛 Bug Fixes
+- **OAuth Environment Check Optimization**: Simplified Tauri environment check, only validates `invoke` function availability
+  - Removed `window.__TAURI__` check
+  - Avoids false positives in certain Tauri versions
+
+### v3.0.1 (2025-12-17)
+
+#### 🔧 Bug Fixes
+- **macOS Process Termination Refactor (Critical)**: Completely resolved the "Unexpected Termination" dialog issue during account switching on macOS. We rewrote the process detection algorithm to intelligently identify the main process based on process arguments and characteristics (filtering out Helpers), enabling a 100% graceful exit via targeted SIGTERM, while maintaining a safety fallback for force cleanup.
+- **Image Generation Optimization**: Added support for `gemini-3-pro-image` and various aspect ratio suffixes (e.g., `-1:1`, `-16:9`). New models: `gemini-3-pro-image-4x3`, `gemini-3-pro-image-3x4`, `gemini-3-pro-image-4k`, `gemini-3-pro-image-16x9-4k`
+  - Parameter support: `size` now accepts `1024x768` (4:3) and `768x1024` (3:4)
+  - 4K HD support: via `-4k` suffix or `"quality": "hd"` parameter
+
+### v3.0.0 (2025-12-16)
+- 🚀 Initial API Proxy release
+- 🔌 Built-in high-performance Rust proxy server
+- 🔄 Smart account rotation and auto-failover
+- 🧠 Full OpenAI protocol compatibility
+- 🖼️ Gemini Imagen 3 image generation support
+
+---
 
 ## 📄 License
 CC BY-NC-SA 4.0

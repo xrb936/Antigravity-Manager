@@ -1,3 +1,4 @@
+
 use serde::{Deserialize, Serialize};
 // use serde_json::Value;
 
@@ -62,6 +63,131 @@ pub struct OpenAIChatRequest {
     pub max_tokens: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
+}
+
+// ===== Anthropic 格式定义 =====
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum AnthropicContent {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image")]
+    Image { source: AnthropicImageSource },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicImageSource {
+    #[serde(rename = "type")]
+    pub source_type: String, // "base64"
+    pub media_type: String, // "image/jpeg", "image/png"
+    pub data: String, // base64 string
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicMessage {
+    pub role: String,
+    // Anthropic content is always a list of blocks, but incoming JSON might process single string? 
+    // Officially it can be string or array of blocks.
+    #[serde(deserialize_with = "deserialize_anthropic_content")]
+    pub content: Vec<AnthropicContent>, 
+}
+
+// Custom deserializer to handle content being either string or array
+fn deserialize_anthropic_content<'de, D>(deserializer: D) -> Result<Vec<AnthropicContent>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct ContentVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for ContentVisitor {
+        type Value = Vec<AnthropicContent>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("string or list of content blocks")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Vec<AnthropicContent>, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(vec![AnthropicContent::Text { text: value.to_string() }])
+        }
+
+        fn visit_seq<V>(self, mut visitor: V) -> Result<Vec<AnthropicContent>, V::Error>
+        where
+            V: serde::de::SeqAccess<'de>,
+        {
+            let mut vec = Vec::new();
+            while let Some(elem) = visitor.next_element()? {
+                vec.push(elem);
+            }
+            Ok(vec)
+        }
+    }
+
+    deserializer.deserialize_any(ContentVisitor)
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicChatRequest {
+    pub model: String,
+    pub messages: Vec<AnthropicMessage>,
+    #[serde(default, deserialize_with = "deserialize_anthropic_system")]
+    pub system: Option<String>, // System prompt is top-level, supports string or array
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i32>,
+}
+
+// Custom deserializer for system field (supports both string and array formats)
+fn deserialize_anthropic_system<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Deserialize;
+    
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum SystemField {
+        String(String),
+        Array(Vec<SystemBlock>),
+    }
+    
+    #[derive(Deserialize)]
+    struct SystemBlock {
+        #[serde(rename = "type")]
+        block_type: String,
+        text: String,
+    }
+    
+    let value = Option::<SystemField>::deserialize(deserializer)?;
+    Ok(value.map(|v| match v {
+        SystemField::String(s) => s,
+        SystemField::Array(blocks) => {
+            blocks.into_iter()
+                .filter(|b| b.block_type == "text")
+                .map(|b| b.text)
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    }))
 }
 
 // ===== Gemini 格式定义 =====
@@ -247,4 +373,67 @@ pub fn convert_openai_to_gemini_contents(messages: &Vec<OpenAIMessage>) -> Vec<G
     contents
 }
 
+/// 将 Anthropic request 转换为 Gemini contents 数组
+pub fn convert_anthropic_to_gemini_contents(request: &AnthropicChatRequest) -> Vec<GeminiContent> {
+    let mut contents = Vec::new();
+    
+    // 1. 处理 System Prompt
+    // Gemini 将 System Prompt 视为 user 消息的一部分，或者放到 systemInstruction 中 (client.rs 处理 systemInstruction)
+    // 这里我们仅处理 messages 部分。System prompt 将在 client.rs 中通过 systemInstruction 处理，
+    // 或者如果需要兼容性，也可以在这里转为 User message。
+    // ANTIGRAVITY 策略: System prompt 尽可能放到 systemInstruction。
+    // 但是，Client 端的 convert 方法只接受 messages 向量，因此需要在 Client 中显式地把 request.system 拿出来。
+    // converter 的这个函数只负责转换 messages 列表。
 
+    for msg in &request.messages {
+        let role = match msg.role.as_str() {
+            "assistant" => "model",
+            "user" => "user",
+            _ => "user", // Default fallback
+        };
+
+        let mut parts = Vec::new();
+
+        for content in &msg.content {
+            match content {
+                AnthropicContent::Text { text } => {
+                    parts.push(GeminiPart {
+                        text: Some(text.clone()),
+                        inline_data: None,
+                    });
+                },
+                AnthropicContent::Image { source } => {
+                    // source_type: "base64", media_type: "image/jpeg", data: "..."
+                    if source.source_type == "base64" {
+                        parts.push(GeminiPart {
+                            text: None,
+                            inline_data: Some(GeminiInlineData {
+                                mime_type: source.media_type.clone(),
+                                data: source.data.clone(),
+                            }),
+                        });
+                    }
+                }
+            }
+        }
+
+        contents.push(GeminiContent {
+            role: role.to_string(),
+            parts,
+        });
+    }
+
+    // 合并连续 User 消息 (Gemini 不允许 consecutive user messages without model response)
+    let mut i = 1;
+    while i < contents.len() {
+        if contents[i].role == contents[i-1].role {
+             let mut parts_to_append = contents[i].parts.clone();
+             contents[i-1].parts.append(&mut parts_to_append);
+             contents.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+
+    contents
+}

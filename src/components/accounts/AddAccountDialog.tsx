@@ -65,14 +65,27 @@ function AddAccountDialog({ onAdd }: AddAccountDialogProps) {
             setStatus('success');
             setMessage(`${actionName} ${t('common.success')}!`);
 
-            // 延迟关闭，让用户看到成功状态
+            // 延迟关闭,让用户看到成功状态
             setTimeout(() => {
                 setIsOpen(false);
                 resetState();
             }, 1500);
         } catch (error) {
             setStatus('error');
-            setMessage(`${actionName} ${t('common.error')}: ${error} `);
+
+            // 改进错误信息显示
+            let errorMsg = String(error);
+
+            // 如果是 refresh_token 缺失错误,显示完整信息(包含解决方案)
+            if (errorMsg.includes('Refresh Token') || errorMsg.includes('refresh_token')) {
+                setMessage(errorMsg);
+            } else if (errorMsg.includes('Tauri') || errorMsg.includes('环境')) {
+                // 环境错误
+                setMessage(`环境错误: ${errorMsg}`);
+            } else {
+                // 其他错误
+                setMessage(`${actionName} ${t('common.error')}: ${errorMsg}`);
+            }
         }
     };
 
