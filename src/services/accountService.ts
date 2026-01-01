@@ -105,3 +105,7 @@ export async function importFromCustomDb(path: string): Promise<Account> {
 export async function syncAccountFromDb(): Promise<Account | null> {
     return await invoke('sync_account_from_db');
 }
+
+export async function toggleProxyStatus(accountId: string, enable: boolean, reason?: string): Promise<void> {
+    return await invoke('toggle_proxy_status', { accountId, enable, reason });
+}

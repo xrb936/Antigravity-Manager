@@ -108,6 +108,7 @@ pub fn run() {
             commands::show_main_window,
             commands::get_antigravity_path,
             commands::check_for_updates,
+            commands::toggle_proxy_status,
             // 反代服务命令
             commands::proxy::start_proxy_service,
             commands::proxy::stop_proxy_service,
@@ -120,6 +121,9 @@ pub fn run() {
             commands::proxy::reload_proxy_accounts,
             commands::proxy::update_model_mapping,
             commands::proxy::fetch_zai_models,
+            commands::proxy::get_proxy_scheduling_config,
+            commands::proxy::update_proxy_scheduling_config,
+            commands::proxy::clear_proxy_session_bindings,
             // Autostart 命令
             commands::autostart::toggle_auto_launch,
             commands::autostart::is_auto_launch_enabled,

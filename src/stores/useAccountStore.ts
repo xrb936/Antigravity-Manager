@@ -26,6 +26,7 @@ interface AccountState {
     importFromDb: () => Promise<void>;
     importFromCustomDb: (path: string) => Promise<void>;
     syncAccountFromDb: () => Promise<void>;
+    toggleProxyStatus: (accountId: string, enable: boolean, reason?: string) => Promise<void>;
 }
 
 export const useAccountStore = create<AccountState>((set, get) => ({
@@ -220,6 +221,16 @@ export const useAccountStore = create<AccountState>((set, get) => ({
             }
         } catch (error) {
             console.error('[AccountStore] Sync from DB failed:', error);
+        }
+    },
+
+    toggleProxyStatus: async (accountId: string, enable: boolean, reason?: string) => {
+        try {
+            await accountService.toggleProxyStatus(accountId, enable, reason);
+            await get().fetchAccounts();
+        } catch (error) {
+            console.error('[AccountStore] Toggle proxy status failed:', error);
+            throw error;
         }
     },
 }));

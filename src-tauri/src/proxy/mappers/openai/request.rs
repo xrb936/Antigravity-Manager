@@ -12,7 +12,7 @@ pub fn transform_openai_request(request: &OpenAIRequest, project_id: &str, mappe
     // Resolve grounding config
     let config = crate::proxy::mappers::common_utils::resolve_request_config(&request.model, mapped_model, &tools_val);
 
-    tracing::info!("[Debug] OpenAI Request: original='{}', mapped='{}', type='{}', has_image_config={}", 
+    tracing::debug!("[Debug] OpenAI Request: original='{}', mapped='{}', type='{}', has_image_config={}", 
         request.model, mapped_model, config.request_type, config.image_config.is_some());
     
     // 1. 提取所有 System Message 并注入补丁
@@ -52,7 +52,7 @@ pub fn transform_openai_request(request: &OpenAIRequest, project_id: &str, mappe
     // 从全局存储获取 thoughtSignature (PR #93 支持)
     let global_thought_sig = get_thought_signature();
     if global_thought_sig.is_some() {
-        tracing::info!("从全局存储获取到 thoughtSignature (长度: {})", global_thought_sig.as_ref().unwrap().len());
+        tracing::debug!("从全局存储获取到 thoughtSignature (长度: {})", global_thought_sig.as_ref().unwrap().len());
     }
 
     // 2. 构建 Gemini contents (过滤掉 system)
@@ -121,7 +121,7 @@ pub fn transform_openai_request(request: &OpenAIRequest, project_id: &str, mappe
                                             image_url.url.clone()
                                         };
                                         
-                                        tracing::info!("[OpenAI-Request] Reading local image: {}", file_path);
+                                        tracing::debug!("[OpenAI-Request] Reading local image: {}", file_path);
                                         
                                         // 读取文件并转换为 base64
                                         if let Ok(file_bytes) = std::fs::read(&file_path) {
@@ -142,9 +142,9 @@ pub fn transform_openai_request(request: &OpenAIRequest, project_id: &str, mappe
                                             parts.push(json!({
                                                 "inlineData": { "mimeType": mime_type, "data": b64 }
                                             }));
-                                            tracing::info!("[OpenAI-Request] Successfully loaded image: {} ({} bytes)", file_path, file_bytes.len());
+                                            tracing::debug!("[OpenAI-Request] Successfully loaded image: {} ({} bytes)", file_path, file_bytes.len());
                                         } else {
-                                            tracing::warn!("[OpenAI-Request] Failed to read local image: {}", file_path);
+                                            tracing::debug!("[OpenAI-Request] Failed to read local image: {}", file_path);
                                         }
                                     }
                                 }

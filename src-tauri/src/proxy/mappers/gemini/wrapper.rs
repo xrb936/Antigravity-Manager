@@ -63,7 +63,7 @@ pub fn wrap_request(body: &Value, project_id: &str, mapped_model: &str) -> Value
         }
     }
 
-    tracing::info!("[Debug] Gemini Wrap: original='{}', mapped='{}', final='{}', type='{}'", 
+    tracing::debug!("[Debug] Gemini Wrap: original='{}', mapped='{}', final='{}', type='{}'", 
         original_model, final_model_name, config.final_model, config.request_type);
     
     // Inject googleSearch tool if needed

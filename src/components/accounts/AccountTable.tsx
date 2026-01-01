@@ -15,9 +15,11 @@ interface AccountTableProps {
     onViewDetails: (accountId: string) => void;
     onExport: (accountId: string) => void;
     onDelete: (accountId: string) => void;
+    onToggleProxy: (accountId: string) => void;
 }
 
-function AccountTable({ accounts, selectedIds, refreshingIds, onToggleSelect, onToggleAll, currentAccountId, switchingAccountId, onSwitch, onRefresh, onViewDetails, onExport, onDelete }: AccountTableProps) {
+
+function AccountTable({ accounts, selectedIds, refreshingIds, onToggleSelect, onToggleAll, currentAccountId, switchingAccountId, onSwitch, onRefresh, onViewDetails, onExport, onDelete, onToggleProxy }: AccountTableProps) {
     const { t } = useTranslation();
 
     if (accounts.length === 0) {
@@ -63,6 +65,7 @@ function AccountTable({ accounts, selectedIds, refreshingIds, onToggleSelect, on
                             onViewDetails={() => onViewDetails(account.id)}
                             onExport={() => onExport(account.id)}
                             onDelete={() => onDelete(account.id)}
+                            onToggleProxy={() => onToggleProxy(account.id)}
                         />
                     ))}
                 </tbody>

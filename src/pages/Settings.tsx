@@ -453,7 +453,7 @@ function Settings() {
                                     <p className="text-sm text-gray-600 dark:text-gray-400">{t('settings.advanced.logs_desc')}</p>
                                 </div>
                                 <div className="badge badge-primary badge-outline gap-2 font-mono">
-                                    v3.3.8
+                                    v3.3.10
                                 </div>
                                 <div className="flex items-center gap-4">
                                     <button
@@ -470,7 +470,7 @@ function Settings() {
                     {/* 代理设置 */}
                     {activeTab === 'proxy' && (
                         <div className="space-y-6">
-                            <h2 className="text-lg font-semibold text-gray-900 dark:text-base-content">{t('settings.tabs.proxy')}</h2>
+                            <h2 className="text-lg font-semibold text-gray-900 dark:text-base-content">{t('settings.proxy.title')}</h2>
 
                             <div className="p-4 bg-gray-50 dark:bg-base-200 rounded-lg border border-gray-100 dark:border-base-300">
                                 <h3 className="text-md font-semibold text-gray-900 dark:text-base-content mb-3 flex items-center gap-2">
@@ -555,7 +555,7 @@ function Settings() {
                                         <h3 className="text-3xl font-black text-gray-900 dark:text-base-content tracking-tight mb-2">Antigravity Tools</h3>
                                         <div className="flex items-center justify-center gap-2 text-sm">
                                             <span className="px-2.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-medium border border-blue-200 dark:border-blue-800">
-                                                v3.3.8
+                                                v3.3.10
                                             </span>
                                             <span className="text-gray-400 dark:text-gray-600">•</span>
                                             <span className="text-gray-500 dark:text-gray-400">Professional Account Management</span>
@@ -600,7 +600,7 @@ function Settings() {
                                         <div>
                                             <div className="text-xs text-gray-400 uppercase tracking-wider font-semibold mb-1">{t('settings.about.github')}</div>
                                             <div className="flex items-center gap-1 font-bold text-gray-900 dark:text-base-content">
-                                                <span>View Code</span>
+                                                <span>{t('settings.about.view_code')}</span>
                                                 <ExternalLink className="w-3 h-3 text-gray-400" />
                                             </div>
                                         </div>
